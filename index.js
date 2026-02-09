@@ -4,6 +4,8 @@ import OpenAI from "openai";
 const app = express();
 app.use(express.json());
 
+console.log("PROMPT ENVIADO A OPENAI:", userPrompt);
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
@@ -26,7 +28,23 @@ app.post("/webhook", async (req, res) => {
       userPrompt = message;
       memory[subscriber_id].push({ role: "user", content: message });
     }
+import OpenAI from "openai";
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+const response = await openai.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages: [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: PROMPT_CLASIFICACION },
+        { type: "image_url", image_url: { url: image_url } }
+      ]
+    }
+  ]
+});
+
+const result = response.choices[0].message.content.trim();
     // IMAGEN (COMPROBANTE)
     if (type === "image") {
       userPrompt = `
@@ -73,21 +91,5 @@ app.listen(8080, () => {
   console.log("Webhook activo en puerto 8080");
 });
 
-import OpenAI from "openai";
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const response = await openai.chat.completions.create({
-  model: "gpt-4o-mini",
-  messages: [
-    {
-      role: "user",
-      content: [
-        { type: "text", text: PROMPT_CLASIFICACION },
-        { type: "image_url", image_url: { url: image_url } }
-      ]
-    }
-  ]
-});
-
-const result = response.choices[0].message.content.trim();
 
