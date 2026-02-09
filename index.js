@@ -72,3 +72,22 @@ Imagen: ${image_url}
 app.listen(8080, () => {
   console.log("Webhook activo en puerto 8080");
 });
+
+import OpenAI from "openai";
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const response = await openai.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages: [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: PROMPT_CLASIFICACION },
+        { type: "image_url", image_url: { url: image_url } }
+      ]
+    }
+  ]
+});
+
+const result = response.choices[0].message.content.trim();
+
