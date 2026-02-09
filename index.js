@@ -4,92 +4,101 @@ import OpenAI from "openai";
 const app = express();
 app.use(express.json());
 
-console.log("PROMPT ENVIADO A OPENAI:", userPrompt);
-
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// MEMORIA SIMPLE EN RAM (luego DB)
+// memoria simple por usuario
 const memory = {};
 
 app.post("/webhook", async (req, res) => {
   try {
     const { type, message, image_url, subscriber_id } = req.body;
 
+    if (!subscriber_id) {
+      return res.status(400).json({ reply: "Sin subscriber_id" });
+    }
+
     if (!memory[subscriber_id]) {
       memory[subscriber_id] = [];
     }
 
-    let userPrompt = "";
-
-    // TEXTO
+    /* ======================
+       CASO 1: TEXTO NORMAL
+       ====================== */
     if (type === "text") {
-      userPrompt = message;
-      memory[subscriber_id].push({ role: "user", content: message });
-    }
-import OpenAI from "openai";
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      console.log("MENSAJE TEXTO:", message);
 
-const response = await openai.chat.completions.create({
-  model: "gpt-4o-mini",
-  messages: [
-    {
-      role: "user",
-      content: [
-        { type: "text", text: PROMPT_CLASIFICACION },
-        { type: "image_url", image_url: { url: image_url } }
-      ]
-    }
-  ]
-});
+      memory[subscriber_id].push({
+        role: "user",
+        content: message
+      });
 
-const result = response.choices[0].message.content.trim();
-    // IMAGEN (COMPROBANTE)
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: memory[subscriber_id]
+      });
+
+      const answer = response.choices[0].message.content;
+
+      memory[subscriber_id].push({
+        role: "assistant",
+        content: answer
+      });
+
+      return res.json({ reply: answer });
+    }
+
+    /* ======================
+       CASO 2: IMAGEN (COMPROBANTE)
+       ====================== */
     if (type === "image") {
-      userPrompt = `
-Analiza esta imagen como comprobante de pago.
-Verifica:
-- Nombre
-- Monto
-- Fecha
-- Método
-- Si parece válido o no
-Responde claro y profesional.
-Imagen: ${image_url}
-`;
+      console.log("IMAGEN RECIBIDA:", image_url);
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text:
+                  "Clasifica la imagen. Responde solo con: COMPROBANTE, NO_COMPROBANTE o INCIERTO."
+              },
+              {
+                type: "image_url",
+                image_url: { url: image_url }
+              }
+            ]
+          }
+        ]
+      });
+
+      const result = response.choices[0].message.content.trim();
+
+      console.log("RESULTADO IMAGEN:", result);
+
+      return res.json({
+        classification: result
+      });
     }
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: SYSTEM_PROMPT
-        },
-        ...memory[subscriber_id],
-        { role: "user", content: userPrompt }
-      ]
+    /* ======================
+       CASO NO SOPORTADO
+       ====================== */
+    return res.json({
+      reply: "Tipo de mensaje no soportado."
     });
 
-    const answer = response.choices[0].message.content;
-
-    memory[subscriber_id].push({
-      role: "assistant",
-      content: answer
+  } catch (error) {
+    console.error("ERROR WEBHOOK:", error);
+    return res.status(500).json({
+      reply: "Error interno del servidor."
     });
-
-    res.json({ reply: answer });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ reply: "Ocurrió un error, intenta nuevamente." });
   }
 });
 
 app.listen(8080, () => {
   console.log("Webhook activo en puerto 8080");
 });
-
-
-
