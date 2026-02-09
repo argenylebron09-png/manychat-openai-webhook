@@ -4,30 +4,53 @@ import OpenAI from "openai";
 const app = express();
 app.use(express.json());
 
+// Inicializar OpenAI con variable de entorno
 const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Webhook que llama ManyChat
 app.post("/webhook", async (req, res) => {
   try {
-    // ✅ LEER EXACTAMENTE LO QUE ENVÍA MANYCHAT
-    const userMessage = req.body.question;
+    console.log("📩 Body recibido:", JSON.stringify(req.body));
 
-    const response = await client.chat.completions.create({
+    // ManyChat envía el texto aquí
+    const userMessage = req.body?.question;
+
+    // Si el mensaje viene vacío (emoji, sticker, system event, etc.)
+    if (!userMessage || userMessage.trim() === "") {
+      return res.status(200).json({
+        reply: "¿En qué puedo ayudarte? 😊",
+      });
+    }
+
+    // Llamada a OpenAI
+    const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [{ role: "user", content: userMessage }]
+      messages: [
+        {
+          role: "user",
+          content: userMessage,
+        },
+      ],
     });
 
-    // ✅ RESPONDER CON EL CAMPO QUE MANYCHAT ESPERA
-    res.json({
-      answer: response.choices[0].message.content
+    const answer = completion.choices[0].message.content;
+
+    // Respuesta para ManyChat
+    res.status(200).json({
+      reply: answer,
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Error en OpenAI" });
+    console.error("❌ Error:", error);
+    res.status(200).json({
+      reply: "Ocurrió un error, intenta de nuevo 🙏",
+    });
   }
 });
 
-app.listen(8080, () => {
-  console.log("Webhook running on port 8080");
+// Puerto requerido por Railway
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log(`🚀 Webhook activo en puerto ${PORT}`);
 });
