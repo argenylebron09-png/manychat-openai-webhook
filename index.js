@@ -8,7 +8,6 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// memoria simple por usuario (RAM)
 const threads = {};
 
 app.post("/webhook", async (req, res) => {
@@ -19,7 +18,6 @@ app.post("/webhook", async (req, res) => {
       return res.json({ reply: "Mensaje inválido." });
     }
 
-    // crear thread por usuario
     if (!threads[subscriber_id]) {
       const thread = await openai.beta.threads.create();
       threads[subscriber_id] = thread.id;
@@ -27,39 +25,41 @@ app.post("/webhook", async (req, res) => {
 
     const threadId = threads[subscriber_id];
 
-    // enviar mensaje al assistant
+    console.log("USANDO ASSISTANT:", process.env.OPENAI_ASSISTANT_ID);
+
     await openai.beta.threads.messages.create(threadId, {
       role: "user",
       content: message
     });
 
-    // ejecutar assistant
     const run = await openai.beta.threads.runs.create(threadId, {
       assistant_id: process.env.OPENAI_ASSISTANT_ID
     });
 
-    // esperar respuesta
     let status;
     do {
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 800));
       const check = await openai.beta.threads.runs.retrieve(threadId, run.id);
       status = check.status;
     } while (status !== "completed");
 
-    // obtener respuesta
     const messages = await openai.beta.threads.messages.list(threadId);
-    const last = messages.data.find(m => m.role === "assistant");
+    const lastAssistantMessage = messages.data.find(
+      m => m.role === "assistant"
+    );
 
     res.json({
-      reply: last?.content?.[0]?.text?.value || "No tengo respuesta en este momento."
+      reply: lastAssistantMessage.content[0].text.value
     });
 
   } catch (error) {
     console.error(error);
-    res.json({ reply: "Ocurrió un error. Intenta nuevamente." });
+    res.json({
+      reply: "Ocurrió un error. Intenta nuevamente."
+    });
   }
 });
 
 app.listen(8080, () => {
-  console.log("Assistant webhook activo");
+  console.log("Webhook activo usando SOLO el Assistant");
 });
