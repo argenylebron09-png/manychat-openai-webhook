@@ -8,9 +8,11 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-/* =====================================================
-   CONFIGURACIÓN DE DOMINIO (CONTROL TOTAL)
-   ===================================================== */
+const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
+
+/* ================================
+   CONTROL DE DOMINIO
+================================ */
 
 const ALLOWED_TOPICS = [
   "curso",
@@ -27,12 +29,9 @@ const ALLOWED_TOPICS = [
   "costo",
   "vale la pena",
   "duración",
-  "aprendo",
   "principiante",
   "medidas",
   "despiece",
-  "electrodomésticos",
-  "presentación",
   "ergonomía"
 ];
 
@@ -45,16 +44,15 @@ const OUT_OF_DOMAIN_REPLY =
   "Este asistente está enfocado exclusivamente en información sobre el curso de Cocinas Modulares. " +
   "Puedo ayudarte con dudas sobre el contenido, metodología y valor del curso.";
 
-/* =====================================================
-   MEMORIA LIGERA POR USUARIO (WHATSAPP)
-   ===================================================== */
+/* ================================
+   THREADS = MEMORIA REAL
+================================ */
 
-const memory = {};
-const MAX_MEMORY = 6;
+const threads = {}; // subscriber_id → thread_id
 
-/* =====================================================
-   WEBHOOK PRINCIPAL
-   ===================================================== */
+/* ================================
+   WEBHOOK
+================================ */
 
 app.post("/webhook", async (req, res) => {
   try {
@@ -64,56 +62,61 @@ app.post("/webhook", async (req, res) => {
       return res.status(400).json({ reply: "Sin subscriber_id" });
     }
 
-    if (!memory[subscriber_id]) {
-      memory[subscriber_id] = [];
-    }
-
     /* =========================
-       CASO 1: TEXTO
+       TEXTO → ASSISTANT
        ========================= */
     if (type === "text") {
 
-      // FILTRO DE DOMINIO (CLAVE)
+      // 1️⃣ FILTRO DE DOMINIO (CLAVE)
       if (!isInDomain(message)) {
         return res.json({ reply: OUT_OF_DOMAIN_REPLY });
       }
 
-      // guardar mensaje del usuario
-      memory[subscriber_id].push({
+      // 2️⃣ CREAR THREAD SI NO EXISTE
+      if (!threads[subscriber_id]) {
+        const thread = await openai.beta.threads.create();
+        threads[subscriber_id] = thread.id;
+      }
+
+      const threadId = threads[subscriber_id];
+
+      // 3️⃣ MENSAJE DEL USUARIO
+      await openai.beta.threads.messages.create(threadId, {
         role: "user",
         content: message
       });
 
-      if (memory[subscriber_id].length > MAX_MEMORY) {
-        memory[subscriber_id] =
-          memory[subscriber_id].slice(-MAX_MEMORY);
+      // 4️⃣ EJECUTAR ASSISTANT
+      const run = await openai.beta.threads.runs.create(threadId, {
+        assistant_id: ASSISTANT_ID
+      });
+
+      // 5️⃣ ESPERAR RESPUESTA
+      let status = "queued";
+      while (status === "queued" || status === "in_progress") {
+        await new Promise(r => setTimeout(r, 1000));
+        const runStatus = await openai.beta.threads.runs.retrieve(
+          threadId,
+          run.id
+        );
+        status = runStatus.status;
       }
 
-      const response = await openai.responses.create({
-        model: "gpt-4o-mini",
-        input: memory[subscriber_id]
-      });
+      // 6️⃣ LEER RESPUESTA
+      const messages = await openai.beta.threads.messages.list(threadId);
+      const lastAssistantMessage = messages.data.find(
+        m => m.role === "assistant"
+      );
 
       const answer =
-        response.output_text ||
+        lastAssistantMessage?.content?.[0]?.text?.value ||
         "Puedo ayudarte con información del curso.";
-
-      // guardar respuesta del bot
-      memory[subscriber_id].push({
-        role: "assistant",
-        content: answer
-      });
-
-      if (memory[subscriber_id].length > MAX_MEMORY) {
-        memory[subscriber_id] =
-          memory[subscriber_id].slice(-MAX_MEMORY);
-      }
 
       return res.json({ reply: answer });
     }
 
     /* =========================
-       CASO 2: IMAGEN (COMPROBANTE)
+       IMAGEN → VISIÓN (SEPARADO)
        ========================= */
     if (type === "image") {
 
@@ -126,7 +129,7 @@ app.post("/webhook", async (req, res) => {
               {
                 type: "input_text",
                 text:
-                  "Clasifica la imagen. Responde SOLO con una de estas opciones: COMPROBANTE, NO_COMPROBANTE o INCIERTO."
+                  "Clasifica la imagen. Responde SOLO con: COMPROBANTE, NO_COMPROBANTE o INCIERTO."
               },
               {
                 type: "input_image",
@@ -143,9 +146,6 @@ app.post("/webhook", async (req, res) => {
       return res.json({ classification: result });
     }
 
-    /* =========================
-       CASO NO SOPORTADO
-       ========================= */
     return res.json({
       reply: "Tipo de mensaje no soportado."
     });
