@@ -8,8 +8,10 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// memoria simple por usuario
-const memory = {};
+const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
+
+// memoria simple: subscriber_id → thread_id
+const threads = {};
 
 app.post("/webhook", async (req, res) => {
   try {
@@ -19,41 +21,58 @@ app.post("/webhook", async (req, res) => {
       return res.status(400).json({ reply: "Sin subscriber_id" });
     }
 
-    if (!memory[subscriber_id]) {
-      memory[subscriber_id] = [];
-    }
-
     /* ======================
-       CASO 1: TEXTO NORMAL
+       CASO 1: TEXTO → ASSISTANT
        ====================== */
     if (type === "text") {
-      console.log("MENSAJE TEXTO:", message);
 
-      memory[subscriber_id].push({
+      // crear thread si no existe
+      if (!threads[subscriber_id]) {
+        const thread = await openai.beta.threads.create();
+        threads[subscriber_id] = thread.id;
+      }
+
+      const threadId = threads[subscriber_id];
+
+      // agregar mensaje del usuario
+      await openai.beta.threads.messages.create(threadId, {
         role: "user",
         content: message
       });
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: memory[subscriber_id]
+      // ejecutar assistant
+      const run = await openai.beta.threads.runs.create(threadId, {
+        assistant_id: ASSISTANT_ID
       });
 
-      const answer = response.choices[0].message.content;
+      // esperar resultado
+      let status = "in_progress";
+      while (status === "in_progress" || status === "queued") {
+        await new Promise(r => setTimeout(r, 1000));
+        const runStatus = await openai.beta.threads.runs.retrieve(
+          threadId,
+          run.id
+        );
+        status = runStatus.status;
+      }
 
-      memory[subscriber_id].push({
-        role: "assistant",
-        content: answer
-      });
+      // leer respuesta
+      const messages = await openai.beta.threads.messages.list(threadId);
+      const lastMessage = messages.data.find(
+        m => m.role === "assistant"
+      );
+
+      const answer =
+        lastMessage?.content?.[0]?.text?.value ||
+        "No pude generar respuesta.";
 
       return res.json({ reply: answer });
     }
 
     /* ======================
-       CASO 2: IMAGEN (COMPROBANTE)
+       CASO 2: IMAGEN → VISIÓN
        ====================== */
     if (type === "image") {
-      console.log("IMAGEN RECIBIDA:", image_url);
 
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -75,18 +94,12 @@ app.post("/webhook", async (req, res) => {
         ]
       });
 
-      const result = response.choices[0].message.content.trim();
+      const result =
+        response.choices[0].message.content.trim();
 
-      console.log("RESULTADO IMAGEN:", result);
-
-      return res.json({
-        classification: result
-      });
+      return res.json({ classification: result });
     }
 
-    /* ======================
-       CASO NO SOPORTADO
-       ====================== */
     return res.json({
       reply: "Tipo de mensaje no soportado."
     });
