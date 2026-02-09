@@ -8,42 +8,62 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const SYSTEM_PROMPT = `
-Eres un asistente EXCLUSIVO del curso.
-
-REGLAS:
-- SOLO respondes sobre el curso.
-- Si la pregunta NO es del curso, responde:
-  "Solo puedo ayudarte con información del curso."
-- NO des datos generales.
-- NO respondas ciencia, curiosidades, etc.
-- Defiende el valor del curso si cuestionan el precio.
-`;
+const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
+const threads = {};
 
 app.post("/webhook", async (req, res) => {
   try {
-    const userMessage = req.body.message || "";
+    const { subscriber_id, message } = req.body;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userMessage }
-      ]
+    if (!subscriber_id || !message) {
+      return res.json({ reply: "Mensaje inválido." });
+    }
+
+    // Crear thread si no existe
+    if (!threads[subscriber_id]) {
+      const thread = await openai.beta.threads.create();
+      threads[subscriber_id] = thread.id;
+    }
+
+    const threadId = threads[subscriber_id];
+
+    // Enviar mensaje al thread
+    await openai.beta.threads.messages.create(threadId, {
+      role: "user",
+      content: message
     });
 
-    const reply = response.choices[0].message.content;
+    // Ejecutar assistant
+    const run = await openai.beta.threads.runs.create(threadId, {
+      assistant_id: ASSISTANT_ID
+    });
 
-    res.json({ reply });
+    // Esperar resultado
+    let status = "queued";
+    while (status === "queued" || status === "in_progress") {
+      await new Promise(r => setTimeout(r, 800));
+      const runStatus = await openai.beta.threads.runs.retrieve(threadId, run.id);
+      status = runStatus.status;
+    }
+
+    // Obtener respuesta
+    const messages = await openai.beta.threads.messages.list(threadId);
+    const lastAssistantMessage = messages.data.find(
+      m => m.role === "assistant"
+    );
+
+    return res.json({
+      reply: lastAssistantMessage.content[0].text.value
+    });
+
   } catch (err) {
     console.error(err);
-    res.status(500).json({
-      reply: "Error interno. Intenta nuevamente."
+    return res.json({
+      reply: "Error interno."
     });
   }
 });
 
 app.listen(8080, () => {
-  console.log("Webhook activo en puerto 8080");
+  console.log("Webhook usando ASSISTANT");
 });
