@@ -4,63 +4,83 @@ import OpenAI from "openai";
 const app = express();
 app.use(express.json());
 
-const client = new OpenAI({
+// Cliente OpenAI
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// 🧠 Memoria en RAM por usuario
-const userMemory = new Map();
+// 👉 Assistant ID desde Railway Variables
+const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
 
-// Configuración
-const MAX_MESSAGES = 6; // historial corto (reduce costos)
+// 🧠 Threads por usuario (memoria por alumno)
+const userThreads = new Map();
 
 app.post("/webhook", async (req, res) => {
   try {
     const message = String(req.body?.message || "").trim();
     const userId = req.body?.user_id || "anonymous";
+    const isStudent =
+      req.body?.is_student === true ||
+      req.body?.is_student === "true";
 
+    // Mensaje vacío (emoji, evento, etc.)
     if (!message) {
       return res.status(200).json({
         reply: "¿En qué puedo ayudarte? 😊"
       });
     }
 
-    // Obtener historial del usuario
-    const history = userMemory.get(userId) || [];
+    // Si NO es alumno confirmado
+    if (!isStudent) {
+      return res.status(200).json({
+        reply: "Para acceder al soporte del curso debes ser alumno confirmado."
+      });
+    }
 
-    // Agregar mensaje del usuario
-    history.push({ role: "user", content: message });
+    // Obtener o crear thread del alumno
+    let threadId = userThreads.get(userId);
 
-    // Limitar tamaño del historial
-    const trimmedHistory = history.slice(-MAX_MESSAGES);
+    if (!threadId) {
+      const thread = await openai.beta.threads.create();
+      threadId = thread.id;
+      userThreads.set(userId, threadId);
+    }
 
-    // Llamar a OpenAI con contexto
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: "Eres un asistente útil y claro que responde por WhatsApp."
-        },
-        ...trimmedHistory
-      ]
+    // Agregar mensaje del usuario al thread
+    await openai.beta.threads.messages.create(threadId, {
+      role: "user",
+      content: message
     });
 
-    const answer = completion.choices[0].message.content;
+    // Ejecutar el Assistant
+    const run = await openai.beta.threads.runs.create(threadId, {
+      assistant_id: ASSISTANT_ID
+    });
 
-    // Guardar respuesta del asistente
-    trimmedHistory.push({ role: "assistant", content: answer });
+    // Esperar a que el Assistant termine
+    let runStatus;
+    do {
+      await new Promise(r => setTimeout(r, 500));
+      runStatus = await openai.beta.threads.runs.retrieve(threadId, run.id);
+    } while (runStatus.status !== "completed");
 
-    // Guardar memoria actualizada
-    userMemory.set(userId, trimmedHistory);
+    // Obtener la última respuesta del Assistant
+    const messages = await openai.beta.threads.messages.list(threadId);
+    const lastAssistantMessage = messages.data.find(
+      m => m.role === "assistant"
+    );
 
-    res.status(200).json({
+    const answer =
+      lastAssistantMessage?.content?.[0]?.text?.value ||
+      "No pude generar una respuesta.";
+
+    return res.status(200).json({
       reply: answer
     });
 
   } catch (error) {
     console.error("❌ Error:", error);
-    res.status(200).json({
+    return res.status(200).json({
       reply: "Ocurrió un error, intenta de nuevo 🙏"
     });
   }
@@ -68,5 +88,5 @@ app.post("/webhook", async (req, res) => {
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log("🚀 Webhook con memoria activo en puerto", PORT);
+  console.log("🚀 Webhook con Assistant activo en puerto", PORT);
 });
