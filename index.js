@@ -15,7 +15,7 @@ app.post("/webhook", async (req, res) => {
     console.log("📩 Body recibido:", JSON.stringify(req.body));
 
     // ManyChat envía el texto aquí
-    const userMessage = req.body?.question;
+    const userMessage = String(req.body?.question || "").trim();
 
     // Si el mensaje viene vacío (emoji, sticker, system event, etc.)
     if (!userMessage || userMessage.trim() === "") {
