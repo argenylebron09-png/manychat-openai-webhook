@@ -10,19 +10,17 @@ const client = new OpenAI({
 
 app.post("/webhook", async (req, res) => {
   try {
-    const userMessage =
-      req.body.message ||
-      req.body.text ||
-      req.body?.data?.text ||
-      "Hola";
+    // ✅ LEER EXACTAMENTE LO QUE ENVÍA MANYCHAT
+    const userMessage = req.body.question;
 
     const response = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: userMessage }]
     });
 
+    // ✅ RESPONDER CON EL CAMPO QUE MANYCHAT ESPERA
     res.json({
-      reply: response.choices[0].message.content
+      answer: response.choices[0].message.content
     });
   } catch (error) {
     console.error(error);
