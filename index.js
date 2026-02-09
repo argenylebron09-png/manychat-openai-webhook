@@ -8,10 +8,53 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
+/* =====================================================
+   CONFIGURACIÓN DE DOMINIO (CONTROL TOTAL)
+   ===================================================== */
 
-// memoria simple: subscriber_id → thread_id
-const threads = {};
+const ALLOWED_TOPICS = [
+  "curso",
+  "cocina",
+  "cocinas",
+  "cocinas modulares",
+  "sketchup",
+  "diseño",
+  "fabricar",
+  "fabricación",
+  "muebles",
+  "módulos",
+  "precio",
+  "costo",
+  "vale la pena",
+  "duración",
+  "aprendo",
+  "principiante",
+  "medidas",
+  "despiece",
+  "electrodomésticos",
+  "presentación",
+  "ergonomía"
+];
+
+function isInDomain(text) {
+  const lower = text.toLowerCase();
+  return ALLOWED_TOPICS.some(topic => lower.includes(topic));
+}
+
+const OUT_OF_DOMAIN_REPLY =
+  "Este asistente está enfocado exclusivamente en información sobre el curso de Cocinas Modulares. " +
+  "Puedo ayudarte con dudas sobre el contenido, metodología y valor del curso.";
+
+/* =====================================================
+   MEMORIA LIGERA POR USUARIO (WHATSAPP)
+   ===================================================== */
+
+const memory = {};
+const MAX_MEMORY = 6;
+
+/* =====================================================
+   WEBHOOK PRINCIPAL
+   ===================================================== */
 
 app.post("/webhook", async (req, res) => {
   try {
@@ -21,73 +64,73 @@ app.post("/webhook", async (req, res) => {
       return res.status(400).json({ reply: "Sin subscriber_id" });
     }
 
-    /* ======================
-       CASO 1: TEXTO → ASSISTANT
-       ====================== */
+    if (!memory[subscriber_id]) {
+      memory[subscriber_id] = [];
+    }
+
+    /* =========================
+       CASO 1: TEXTO
+       ========================= */
     if (type === "text") {
 
-      // crear thread si no existe
-      if (!threads[subscriber_id]) {
-        const thread = await openai.beta.threads.create();
-        threads[subscriber_id] = thread.id;
+      // FILTRO DE DOMINIO (CLAVE)
+      if (!isInDomain(message)) {
+        return res.json({ reply: OUT_OF_DOMAIN_REPLY });
       }
 
-      const threadId = threads[subscriber_id];
-
-      // agregar mensaje del usuario
-      await openai.beta.threads.messages.create(threadId, {
+      // guardar mensaje del usuario
+      memory[subscriber_id].push({
         role: "user",
         content: message
       });
 
-      // ejecutar assistant
-      const run = await openai.beta.threads.runs.create(threadId, {
-        assistant_id: ASSISTANT_ID
-      });
-
-      // esperar resultado
-      let status = "in_progress";
-      while (status === "in_progress" || status === "queued") {
-        await new Promise(r => setTimeout(r, 1000));
-        const runStatus = await openai.beta.threads.runs.retrieve(
-          threadId,
-          run.id
-        );
-        status = runStatus.status;
+      if (memory[subscriber_id].length > MAX_MEMORY) {
+        memory[subscriber_id] =
+          memory[subscriber_id].slice(-MAX_MEMORY);
       }
 
-      // leer respuesta
-      const messages = await openai.beta.threads.messages.list(threadId);
-      const lastMessage = messages.data.find(
-        m => m.role === "assistant"
-      );
+      const response = await openai.responses.create({
+        model: "gpt-4o-mini",
+        input: memory[subscriber_id]
+      });
 
       const answer =
-        lastMessage?.content?.[0]?.text?.value ||
-        "No pude generar respuesta.";
+        response.output_text ||
+        "Puedo ayudarte con información del curso.";
+
+      // guardar respuesta del bot
+      memory[subscriber_id].push({
+        role: "assistant",
+        content: answer
+      });
+
+      if (memory[subscriber_id].length > MAX_MEMORY) {
+        memory[subscriber_id] =
+          memory[subscriber_id].slice(-MAX_MEMORY);
+      }
 
       return res.json({ reply: answer });
     }
 
-    /* ======================
-       CASO 2: IMAGEN → VISIÓN
-       ====================== */
+    /* =========================
+       CASO 2: IMAGEN (COMPROBANTE)
+       ========================= */
     if (type === "image") {
 
-      const response = await openai.chat.completions.create({
+      const response = await openai.responses.create({
         model: "gpt-4o-mini",
-        messages: [
+        input: [
           {
             role: "user",
             content: [
               {
-                type: "text",
+                type: "input_text",
                 text:
-                  "Clasifica la imagen. Responde solo con: COMPROBANTE, NO_COMPROBANTE o INCIERTO."
+                  "Clasifica la imagen. Responde SOLO con una de estas opciones: COMPROBANTE, NO_COMPROBANTE o INCIERTO."
               },
               {
-                type: "image_url",
-                image_url: { url: image_url }
+                type: "input_image",
+                image_url: image_url
               }
             ]
           }
@@ -95,11 +138,14 @@ app.post("/webhook", async (req, res) => {
       });
 
       const result =
-        response.choices[0].message.content.trim();
+        response.output_text?.trim() || "INCIERTO";
 
       return res.json({ classification: result });
     }
 
+    /* =========================
+       CASO NO SOPORTADO
+       ========================= */
     return res.json({
       reply: "Tipo de mensaje no soportado."
     });
