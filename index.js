@@ -4,53 +4,69 @@ import OpenAI from "openai";
 const app = express();
 app.use(express.json());
 
-// Inicializar OpenAI con variable de entorno
 const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY
 });
 
-// Webhook que llama ManyChat
+// 🧠 Memoria en RAM por usuario
+const userMemory = new Map();
+
+// Configuración
+const MAX_MESSAGES = 6; // historial corto (reduce costos)
+
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("📩 Body recibido:", JSON.stringify(req.body));
+    const message = String(req.body?.message || "").trim();
+    const userId = req.body?.user_id || "anonymous";
 
-    // ManyChat envía el texto aquí
-    const userMessage = String(req.body?.question || "").trim();
-
-    // Si el mensaje viene vacío (emoji, sticker, system event, etc.)
-    if (!userMessage || userMessage.trim() === "") {
+    if (!message) {
       return res.status(200).json({
-        reply: "¿En qué puedo ayudarte? 😊",
+        reply: "¿En qué puedo ayudarte? 😊"
       });
     }
 
-    // Llamada a OpenAI
+    // Obtener historial del usuario
+    const history = userMemory.get(userId) || [];
+
+    // Agregar mensaje del usuario
+    history.push({ role: "user", content: message });
+
+    // Limitar tamaño del historial
+    const trimmedHistory = history.slice(-MAX_MESSAGES);
+
+    // Llamar a OpenAI con contexto
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         {
-          role: "user",
-          content: userMessage,
+          role: "system",
+          content: "Eres un asistente útil y claro que responde por WhatsApp."
         },
-      ],
+        ...trimmedHistory
+      ]
     });
 
     const answer = completion.choices[0].message.content;
 
-    // Respuesta para ManyChat
+    // Guardar respuesta del asistente
+    trimmedHistory.push({ role: "assistant", content: answer });
+
+    // Guardar memoria actualizada
+    userMemory.set(userId, trimmedHistory);
+
     res.status(200).json({
-      reply: answer,
+      reply: answer
     });
+
   } catch (error) {
     console.error("❌ Error:", error);
     res.status(200).json({
-      reply: "Ocurrió un error, intenta de nuevo 🙏",
+      reply: "Ocurrió un error, intenta de nuevo 🙏"
     });
   }
 });
 
-// Puerto requerido por Railway
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`🚀 Webhook activo en puerto ${PORT}`);
+  console.log("🚀 Webhook con memoria activo en puerto", PORT);
 });
